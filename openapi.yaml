@@ -1,0 +1,1591 @@
+openapi: 3.0.3
+info:
+  title: X-Ray Debugging System API
+  description: |
+    REST API for tracking multi-step decision processes. 
+    This system captures detailed execution traces including inputs, 
+    candidates considered, filters applied, outputs, and reasoning 
+    for each step in a decision pipeline.
+  version: 1.0.0
+  contact:
+    name: X-Ray System Team
+  license:
+    name: MIT
+
+servers:
+  - url: http://localhost:8000/api/v1
+    description: Local development server
+  - url: https://api.xray-system.com/v1
+    description: Production server
+
+tags:
+  - name: Runs
+    description: Operations for managing execution runs
+  - name: Steps
+    description: Operations for managing steps within runs
+  - name: Query
+    description: Search and query operations
+
+paths:
+  # ============================================================
+  # POST /runs - Create a new run
+  # ============================================================
+  /runs:
+    post:
+      tags:
+        - Runs
+      operationId: createRun
+      summary: Create a new run
+      description: |
+        Initializes a new execution run. The run starts in 'running' status 
+        and can have steps added to it. Call PATCH /runs/{runId} to complete 
+        or fail the run.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateRunRequest'
+            examples:
+              minimal:
+                summary: Minimal run creation
+                value:
+                  name: "Product Recommendation Run"
+              full:
+                summary: Full run creation with all fields
+                value:
+                  name: "Product Recommendation Run"
+                  metadata:
+                    version: "1.0.0"
+                    environment: "production"
+                    tags: ["ml-pipeline", "recommendations"]
+                  context:
+                    user_id: "user_xyz"
+                    session_id: "sess_456"
+                    trace_id: "trace_abc"
+                    custom:
+                      experiment_id: "exp_001"
+      responses:
+        '201':
+          description: Run created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Run'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  # ============================================================
+  # GET /runs/{runId} - Get full run details
+  # ============================================================
+  /runs/{runId}:
+    get:
+      tags:
+        - Runs
+      operationId: getRun
+      summary: Get full run details
+      description: |
+        Retrieves complete details of a run including all steps.
+        Use query parameters to control the level of detail returned.
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+        - name: include_steps
+          in: query
+          description: Whether to include full step details in response
+          schema:
+            type: boolean
+            default: true
+        - name: include_candidates
+          in: query
+          description: Whether to include candidate details in steps
+          schema:
+            type: boolean
+            default: true
+        - name: include_reasoning
+          in: query
+          description: Whether to include reasoning details in steps
+          schema:
+            type: boolean
+            default: true
+        - name: step_limit
+          in: query
+          description: Maximum number of steps to return (for pagination)
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+        - name: step_offset
+          in: query
+          description: Number of steps to skip (for pagination)
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        '200':
+          description: Run details retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunWithSteps'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+    patch:
+      tags:
+        - Runs
+      operationId: updateRun
+      summary: Update run status or metadata
+      description: |
+        Updates a run's status (e.g., mark as completed or failed) 
+        or adds final output data.
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateRunRequest'
+            examples:
+              complete:
+                summary: Complete a run successfully
+                value:
+                  status: "completed"
+                  final_output:
+                    success: true
+                    result_ids: ["prod_001", "prod_002"]
+                    summary: "Returned top 2 recommendations"
+              fail:
+                summary: Mark run as failed
+                value:
+                  status: "failed"
+                  final_output:
+                    success: false
+                    error: "Timeout exceeded"
+      responses:
+        '200':
+          description: Run updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Run'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+    delete:
+      tags:
+        - Runs
+      operationId: deleteRun
+      summary: Delete a run and all its steps
+      description: Permanently deletes a run and all associated steps.
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '204':
+          description: Run deleted successfully
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  # ============================================================
+  # POST /runs/{runId}/steps - Add step to run
+  # ============================================================
+  /runs/{runId}/steps:
+    post:
+      tags:
+        - Steps
+      operationId: createStep
+      summary: Add a step to a run
+      description: |
+        Adds a new step to an existing run. Steps are automatically 
+        assigned an index based on creation order. Use this endpoint 
+        to record each stage of your decision pipeline.
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateStepRequest'
+            examples:
+              candidate_generation:
+                summary: Candidate generation step
+                value:
+                  step_type: "candidate_generation"
+                  name: "Initial Candidate Generation"
+                  inputs:
+                    schema_version: "1.0"
+                    data:
+                      query: "wireless headphones"
+                      max_results: 100
+                  candidates:
+                    total_count: 100
+                    items:
+                      - id: "prod_001"
+                        score: 0.95
+                        source: "vector_search"
+                        data:
+                          name: "Sony WH-1000XM5"
+                      - id: "prod_002"
+                        score: 0.89
+                        source: "vector_search"
+                        data:
+                          name: "Bose QC45"
+                  filters:
+                    - type: "stock_availability"
+                      name: "In Stock Filter"
+                      config:
+                        require_stock: true
+                      metrics:
+                        input_count: 100
+                        output_count: 85
+                        execution_time_ms: 45
+                  outputs:
+                    count: 42
+                    result_ids: ["prod_001", "prod_002", "prod_003"]
+                  reasoning:
+                    algorithm: "hybrid_ranking"
+                    explanation: "Combined semantic search with popularity scoring"
+                    confidence: 0.87
+                    factors:
+                      - name: "semantic_similarity"
+                        value: 0.92
+                        weight: 0.7
+                  status: "success"
+              filtering_step:
+                summary: Filtering step
+                value:
+                  step_type: "filtering"
+                  name: "Apply Business Rules"
+                  parent_step_id: "step_001"
+                  inputs:
+                    data:
+                      candidate_ids: ["prod_001", "prod_002", "prod_003"]
+                  filters:
+                    - type: "price_range"
+                      name: "Price Range Filter"
+                      config:
+                        min_price: 50
+                        max_price: 500
+                      metrics:
+                        input_count: 42
+                        output_count: 35
+                    - type: "brand_blocklist"
+                      name: "Blocked Brands Filter"
+                      config:
+                        blocked_brands: ["BrandX"]
+                      metrics:
+                        input_count: 35
+                        output_count: 33
+                  outputs:
+                    count: 33
+                    result_ids: ["prod_001", "prod_002"]
+                  status: "success"
+      responses:
+        '201':
+          description: Step created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Step'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          description: Run not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Run is already completed or failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+    get:
+      tags:
+        - Steps
+      operationId: listSteps
+      summary: List all steps in a run
+      description: Returns a paginated list of steps for a specific run.
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+        - name: status
+          in: query
+          description: Filter by step status
+          schema:
+            $ref: '#/components/schemas/StepStatus'
+        - name: step_type
+          in: query
+          description: Filter by step type
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Steps retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StepListResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  # ============================================================
+  # GET /runs/{runId}/steps/{stepId} - Get single step
+  # ============================================================
+  /runs/{runId}/steps/{stepId}:
+    get:
+      tags:
+        - Steps
+      operationId: getStep
+      summary: Get a specific step
+      description: Retrieves detailed information about a specific step.
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+        - $ref: '#/components/parameters/StepId'
+      responses:
+        '200':
+          description: Step retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Step'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+    patch:
+      tags:
+        - Steps
+      operationId: updateStep
+      summary: Update a step
+      description: |
+        Updates a step's data. Useful for adding outputs or reasoning 
+        after initial creation, or updating status.
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+        - $ref: '#/components/parameters/StepId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateStepRequest'
+      responses:
+        '200':
+          description: Step updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Step'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  # ============================================================
+  # GET /runs/query - Query across runs
+  # ============================================================
+  /runs/query:
+    get:
+      tags:
+        - Query
+      operationId: queryRuns
+      summary: Query and search runs
+      description: |
+        Search and filter across runs using various criteria.
+        Supports pagination, sorting, and complex filtering.
+      parameters:
+        # Pagination
+        - name: limit
+          in: query
+          description: Maximum number of runs to return
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: offset
+          in: query
+          description: Number of runs to skip
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+        - name: cursor
+          in: query
+          description: Cursor for cursor-based pagination (alternative to offset)
+          schema:
+            type: string
+
+        # Time filters
+        - name: created_after
+          in: query
+          description: Filter runs created after this timestamp (ISO 8601)
+          schema:
+            type: string
+            format: date-time
+          example: "2026-01-01T00:00:00Z"
+        - name: created_before
+          in: query
+          description: Filter runs created before this timestamp (ISO 8601)
+          schema:
+            type: string
+            format: date-time
+        - name: completed_after
+          in: query
+          description: Filter runs completed after this timestamp
+          schema:
+            type: string
+            format: date-time
+        - name: completed_before
+          in: query
+          description: Filter runs completed before this timestamp
+          schema:
+            type: string
+            format: date-time
+
+        # Status filters
+        - name: status
+          in: query
+          description: Filter by run status (can specify multiple)
+          schema:
+            type: array
+            items:
+              $ref: '#/components/schemas/RunStatus'
+          style: form
+          explode: true
+
+        # Duration filters
+        - name: min_duration_ms
+          in: query
+          description: Filter runs with duration >= this value
+          schema:
+            type: integer
+            minimum: 0
+        - name: max_duration_ms
+          in: query
+          description: Filter runs with duration <= this value
+          schema:
+            type: integer
+            minimum: 0
+
+        # Context filters
+        - name: user_id
+          in: query
+          description: Filter by user ID in context
+          schema:
+            type: string
+        - name: session_id
+          in: query
+          description: Filter by session ID in context
+          schema:
+            type: string
+        - name: trace_id
+          in: query
+          description: Filter by trace ID in context
+          schema:
+            type: string
+
+        # Metadata filters
+        - name: environment
+          in: query
+          description: Filter by environment (e.g., production, staging)
+          schema:
+            type: string
+        - name: tags
+          in: query
+          description: Filter by tags (runs must have ALL specified tags)
+          schema:
+            type: array
+            items:
+              type: string
+          style: form
+          explode: true
+        - name: version
+          in: query
+          description: Filter by version in metadata
+          schema:
+            type: string
+
+        # Name search
+        - name: name
+          in: query
+          description: Search by run name (partial match, case-insensitive)
+          schema:
+            type: string
+
+        # Step-based filters
+        - name: min_steps
+          in: query
+          description: Filter runs with at least this many steps
+          schema:
+            type: integer
+            minimum: 0
+        - name: max_steps
+          in: query
+          description: Filter runs with at most this many steps
+          schema:
+            type: integer
+            minimum: 0
+        - name: has_step_type
+          in: query
+          description: Filter runs that contain a step of this type
+          schema:
+            type: string
+
+        # Output filters
+        - name: success
+          in: query
+          description: Filter by final output success status
+          schema:
+            type: boolean
+
+        # Sorting
+        - name: sort_by
+          in: query
+          description: Field to sort by
+          schema:
+            type: string
+            enum:
+              - created_at
+              - completed_at
+              - duration_ms
+              - step_count
+              - name
+            default: created_at
+        - name: sort_order
+          in: query
+          description: Sort order
+          schema:
+            type: string
+            enum:
+              - asc
+              - desc
+            default: desc
+
+        # Include options
+        - name: include_steps
+          in: query
+          description: Include step summaries in response
+          schema:
+            type: boolean
+            default: false
+
+      responses:
+        '200':
+          description: Query executed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueryRunsResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+    post:
+      tags:
+        - Query
+      operationId: queryRunsAdvanced
+      summary: Advanced query with complex filters
+      description: |
+        Advanced search using a JSON query body for complex filtering 
+        scenarios that can't be expressed via query parameters.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdvancedQueryRequest'
+            examples:
+              complex_filter:
+                summary: Complex filter with nested conditions
+                value:
+                  filters:
+                    and:
+                      - field: "status"
+                        operator: "eq"
+                        value: "completed"
+                      - or:
+                          - field: "context.user_id"
+                            operator: "eq"
+                            value: "user_xyz"
+                          - field: "metadata.tags"
+                            operator: "contains"
+                            value: "priority"
+                      - field: "duration_ms"
+                        operator: "gte"
+                        value: 1000
+                  pagination:
+                    limit: 20
+                    offset: 0
+                  sort:
+                    - field: "created_at"
+                      order: "desc"
+                  include:
+                    steps: false
+                    step_count: true
+              step_filter:
+                summary: Filter by step characteristics
+                value:
+                  filters:
+                    and:
+                      - field: "status"
+                        operator: "eq"
+                        value: "completed"
+                  step_filters:
+                    any:
+                      - field: "step_type"
+                        operator: "eq"
+                        value: "candidate_generation"
+                      - field: "reasoning.confidence"
+                        operator: "lt"
+                        value: 0.5
+                  pagination:
+                    limit: 10
+      responses:
+        '200':
+          description: Query executed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueryRunsResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  # ============================================================
+  # GET /runs/stats - Get aggregate statistics
+  # ============================================================
+  /runs/stats:
+    get:
+      tags:
+        - Query
+      operationId: getRunStats
+      summary: Get aggregate statistics
+      description: Returns aggregate statistics about runs matching the filter criteria.
+      parameters:
+        - name: created_after
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: created_before
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: environment
+          in: query
+          schema:
+            type: string
+        - name: group_by
+          in: query
+          description: Field to group statistics by
+          schema:
+            type: string
+            enum:
+              - status
+              - environment
+              - hour
+              - day
+              - week
+      responses:
+        '200':
+          description: Statistics retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunStatsResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+# ============================================================
+# Components
+# ============================================================
+components:
+  # ----------------------------------------------------------
+  # Parameters
+  # ----------------------------------------------------------
+  parameters:
+    RunId:
+      name: runId
+      in: path
+      required: true
+      description: Unique identifier for the run
+      schema:
+        type: string
+        pattern: '^run_[a-zA-Z0-9]+$'
+      example: run_abc123
+
+    StepId:
+      name: stepId
+      in: path
+      required: true
+      description: Unique identifier for the step
+      schema:
+        type: string
+        pattern: '^step_[a-zA-Z0-9]+$'
+      example: step_001
+
+  # ----------------------------------------------------------
+  # Responses
+  # ----------------------------------------------------------
+  responses:
+    BadRequest:
+      description: Invalid request parameters
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: "BAD_REQUEST"
+            message: "Invalid request parameters"
+            details:
+              - field: "name"
+                issue: "Required field is missing"
+
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: "NOT_FOUND"
+            message: "Run not found"
+            details: null
+
+    InternalError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: "INTERNAL_ERROR"
+            message: "An unexpected error occurred"
+            details: null
+
+  # ----------------------------------------------------------
+  # Schemas
+  # ----------------------------------------------------------
+  schemas:
+    # ========== Enums ==========
+    RunStatus:
+      type: string
+      enum:
+        - running
+        - completed
+        - failed
+        - cancelled
+      description: Status of a run
+
+    StepStatus:
+      type: string
+      enum:
+        - pending
+        - running
+        - success
+        - failed
+        - skipped
+      description: Status of a step
+
+    # ========== Core Schemas ==========
+    Run:
+      type: object
+      description: A single execution run
+      required:
+        - run_id
+        - name
+        - status
+        - created_at
+      properties:
+        run_id:
+          type: string
+          description: Unique identifier for the run
+          example: run_abc123
+        name:
+          type: string
+          description: Human-readable name for the run
+          example: Product Recommendation Run
+        status:
+          $ref: '#/components/schemas/RunStatus'
+        created_at:
+          type: string
+          format: date-time
+          description: When the run was created
+        completed_at:
+          type: string
+          format: date-time
+          description: When the run completed (null if still running)
+          nullable: true
+        duration_ms:
+          type: integer
+          description: Total duration in milliseconds (null if still running)
+          nullable: true
+        metadata:
+          $ref: '#/components/schemas/RunMetadata'
+        context:
+          $ref: '#/components/schemas/RunContext'
+        step_refs:
+          type: array
+          description: List of step IDs in this run
+          items:
+            type: string
+        step_count:
+          type: integer
+          description: Total number of steps
+        summary:
+          $ref: '#/components/schemas/RunSummary'
+        final_output:
+          $ref: '#/components/schemas/FinalOutput'
+
+    RunWithSteps:
+      allOf:
+        - $ref: '#/components/schemas/Run'
+        - type: object
+          properties:
+            steps:
+              type: array
+              description: Full step details (when include_steps=true)
+              items:
+                $ref: '#/components/schemas/Step'
+
+    RunMetadata:
+      type: object
+      description: Metadata about the run
+      properties:
+        version:
+          type: string
+          description: Version of the pipeline/algorithm
+          example: "1.0.0"
+        environment:
+          type: string
+          description: Environment (production, staging, etc.)
+          example: production
+        tags:
+          type: array
+          items:
+            type: string
+          description: Tags for categorization
+          example: ["ml-pipeline", "recommendations"]
+        custom:
+          type: object
+          additionalProperties: true
+          description: Custom metadata fields
+
+    RunContext:
+      type: object
+      description: Contextual information about the run
+      properties:
+        user_id:
+          type: string
+          description: User ID associated with this run
+        session_id:
+          type: string
+          description: Session ID
+        trace_id:
+          type: string
+          description: Distributed tracing ID
+        request_id:
+          type: string
+          description: Original request ID
+        custom:
+          type: object
+          additionalProperties: true
+          description: Custom context fields
+
+    RunSummary:
+      type: object
+      description: Summary statistics for the run
+      properties:
+        total_candidates_considered:
+          type: integer
+        total_candidates_filtered:
+          type: integer
+        final_output_count:
+          type: integer
+        total_filters_applied:
+          type: integer
+        avg_step_duration_ms:
+          type: number
+
+    FinalOutput:
+      type: object
+      description: Final output of the run
+      properties:
+        success:
+          type: boolean
+          description: Whether the run was successful
+        result_ids:
+          type: array
+          items:
+            type: string
+          description: IDs of final results
+        result_data:
+          type: object
+          additionalProperties: true
+          description: Full result data
+        summary:
+          type: string
+          description: Human-readable summary
+        error:
+          type: string
+          description: Error message if failed
+          nullable: true
+
+    # ========== Step Schemas ==========
+    Step:
+      type: object
+      description: A single step in a run
+      required:
+        - step_id
+        - run_id
+        - step_index
+        - name
+        - status
+      properties:
+        step_id:
+          type: string
+          example: step_001
+        run_id:
+          type: string
+          example: run_abc123
+        step_index:
+          type: integer
+          description: Order of this step in the run (0-indexed)
+        step_type:
+          type: string
+          description: Type/category of step
+          example: candidate_generation
+        name:
+          type: string
+          description: Human-readable step name
+          example: Initial Candidate Generation
+        timing:
+          $ref: '#/components/schemas/StepTiming'
+        status:
+          $ref: '#/components/schemas/StepStatus'
+        parent_step_id:
+          type: string
+          description: Parent step ID for nested steps
+          nullable: true
+        child_step_ids:
+          type: array
+          items:
+            type: string
+          description: Child step IDs
+        inputs:
+          $ref: '#/components/schemas/StepInputs'
+        candidates:
+          $ref: '#/components/schemas/StepCandidates'
+        filters:
+          type: array
+          items:
+            $ref: '#/components/schemas/StepFilter'
+        outputs:
+          $ref: '#/components/schemas/StepOutputs'
+        reasoning:
+          $ref: '#/components/schemas/StepReasoning'
+        debug:
+          $ref: '#/components/schemas/StepDebug'
+
+    StepTiming:
+      type: object
+      properties:
+        started_at:
+          type: string
+          format: date-time
+        ended_at:
+          type: string
+          format: date-time
+          nullable: true
+        duration_ms:
+          type: integer
+          nullable: true
+
+    StepInputs:
+      type: object
+      description: Inputs to this step
+      properties:
+        schema_version:
+          type: string
+          description: Version of the input schema
+        data:
+          type: object
+          additionalProperties: true
+          description: The actual input data
+        source_step_id:
+          type: string
+          description: Step ID that produced these inputs
+          nullable: true
+
+    StepCandidates:
+      type: object
+      description: Candidates considered in this step
+      properties:
+        schema_version:
+          type: string
+        total_count:
+          type: integer
+          description: Total number of candidates
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Candidate'
+          description: Candidate items (may be sampled)
+        storage_ref:
+          type: string
+          description: Reference to external storage for full candidate list
+          nullable: true
+
+    Candidate:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Unique identifier for this candidate
+        score:
+          type: number
+          description: Relevance/ranking score
+        source:
+          type: string
+          description: Where this candidate came from
+        rank:
+          type: integer
+          description: Position in ranked list
+        data:
+          type: object
+          additionalProperties: true
+          description: Additional candidate data
+
+    StepFilter:
+      type: object
+      description: A filter applied during this step
+      properties:
+        id:
+          type: string
+          description: Unique filter instance ID
+        type:
+          type: string
+          description: Type of filter
+          example: stock_availability
+        name:
+          type: string
+          description: Human-readable filter name
+        order:
+          type: integer
+          description: Order in which filter was applied
+        config:
+          type: object
+          additionalProperties: true
+          description: Filter configuration
+        metrics:
+          $ref: '#/components/schemas/FilterMetrics'
+        removed_sample:
+          type: array
+          items:
+            type: string
+          description: Sample of removed candidate IDs
+        removed_reasons:
+          type: object
+          additionalProperties:
+            type: string
+          description: Map of candidate ID to removal reason
+
+    FilterMetrics:
+      type: object
+      properties:
+        input_count:
+          type: integer
+          description: Number of candidates before filter
+        output_count:
+          type: integer
+          description: Number of candidates after filter
+        removed_count:
+          type: integer
+          description: Number of candidates removed
+        execution_time_ms:
+          type: integer
+          description: Time to execute filter
+
+    StepOutputs:
+      type: object
+      description: Outputs from this step
+      properties:
+        schema_version:
+          type: string
+        count:
+          type: integer
+          description: Number of output items
+        result_ids:
+          type: array
+          items:
+            type: string
+          description: IDs of output items
+        data:
+          type: object
+          additionalProperties: true
+          description: Additional output data
+        storage_ref:
+          type: string
+          description: Reference to external storage
+          nullable: true
+
+    StepReasoning:
+      type: object
+      description: Reasoning and decision explanation
+      properties:
+        algorithm:
+          type: string
+          description: Algorithm or method used
+          example: hybrid_ranking
+        explanation:
+          type: string
+          description: Human-readable explanation
+        confidence:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+          description: Confidence score (0-1)
+        factors:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReasoningFactor'
+        decision_path:
+          type: array
+          items:
+            $ref: '#/components/schemas/Decision'
+          description: Sequence of decisions made
+        alternatives_considered:
+          type: array
+          items:
+            $ref: '#/components/schemas/Alternative'
+        model_info:
+          type: object
+          description: ML model information if applicable
+          properties:
+            model_id:
+              type: string
+            model_version:
+              type: string
+            features_used:
+              type: array
+              items:
+                type: string
+
+    ReasoningFactor:
+      type: object
+      properties:
+        name:
+          type: string
+          description: Factor name
+        value:
+          type: number
+          description: Factor value
+        weight:
+          type: number
+          description: Weight given to this factor
+        contribution:
+          type: number
+          description: Contribution to final decision
+        description:
+          type: string
+          description: Human-readable description
+
+    Decision:
+      type: object
+      properties:
+        decision:
+          type: string
+          description: What was decided
+        reason:
+          type: string
+          description: Why this decision was made
+        confidence:
+          type: number
+          description: Confidence in this decision
+        timestamp:
+          type: string
+          format: date-time
+
+    Alternative:
+      type: object
+      properties:
+        option:
+          type: string
+          description: Alternative option considered
+        reason_rejected:
+          type: string
+          description: Why this option was not chosen
+        score:
+          type: number
+          description: Score for this alternative
+
+    StepDebug:
+      type: object
+      description: Debug information
+      properties:
+        logs:
+          type: array
+          items:
+            type: string
+          description: Log messages
+        warnings:
+          type: array
+          items:
+            type: string
+          description: Warning messages
+        errors:
+          type: array
+          items:
+            type: string
+          description: Error messages
+        metrics:
+          type: object
+          additionalProperties:
+            type: number
+          description: Performance metrics
+        trace:
+          type: object
+          additionalProperties: true
+          description: Trace data
+
+    # ========== Request Schemas ==========
+    CreateRunRequest:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+          description: Human-readable name for the run
+          minLength: 1
+          maxLength: 255
+        metadata:
+          $ref: '#/components/schemas/RunMetadata'
+        context:
+          $ref: '#/components/schemas/RunContext'
+
+    UpdateRunRequest:
+      type: object
+      properties:
+        status:
+          $ref: '#/components/schemas/RunStatus'
+        final_output:
+          $ref: '#/components/schemas/FinalOutput'
+        metadata:
+          type: object
+          additionalProperties: true
+          description: Additional metadata to merge
+
+    CreateStepRequest:
+      type: object
+      required:
+        - name
+      properties:
+        step_type:
+          type: string
+          description: Type/category of step
+        name:
+          type: string
+          description: Human-readable step name
+        parent_step_id:
+          type: string
+          description: Parent step ID for nested steps
+        inputs:
+          $ref: '#/components/schemas/StepInputs'
+        candidates:
+          $ref: '#/components/schemas/StepCandidates'
+        filters:
+          type: array
+          items:
+            $ref: '#/components/schemas/StepFilter'
+        outputs:
+          $ref: '#/components/schemas/StepOutputs'
+        reasoning:
+          $ref: '#/components/schemas/StepReasoning'
+        status:
+          $ref: '#/components/schemas/StepStatus'
+        debug:
+          $ref: '#/components/schemas/StepDebug'
+
+    UpdateStepRequest:
+      type: object
+      properties:
+        status:
+          $ref: '#/components/schemas/StepStatus'
+        outputs:
+          $ref: '#/components/schemas/StepOutputs'
+        reasoning:
+          $ref: '#/components/schemas/StepReasoning'
+        debug:
+          $ref: '#/components/schemas/StepDebug'
+
+    # ========== Query Schemas ==========
+    AdvancedQueryRequest:
+      type: object
+      properties:
+        filters:
+          $ref: '#/components/schemas/FilterExpression'
+        step_filters:
+          type: object
+          description: Filters applied to steps (any/all matching)
+          properties:
+            any:
+              type: array
+              items:
+                $ref: '#/components/schemas/FilterCondition'
+              description: Run matches if ANY step matches any condition
+            all:
+              type: array
+              items:
+                $ref: '#/components/schemas/FilterCondition'
+              description: Run matches if ALL conditions are met by some step
+        pagination:
+          type: object
+          properties:
+            limit:
+              type: integer
+              minimum: 1
+              maximum: 100
+              default: 20
+            offset:
+              type: integer
+              minimum: 0
+              default: 0
+            cursor:
+              type: string
+        sort:
+          type: array
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+              order:
+                type: string
+                enum: [asc, desc]
+        include:
+          type: object
+          properties:
+            steps:
+              type: boolean
+              default: false
+            step_count:
+              type: boolean
+              default: true
+            summary:
+              type: boolean
+              default: true
+
+    FilterExpression:
+      type: object
+      description: Recursive filter expression (AND/OR of conditions)
+      properties:
+        and:
+          type: array
+          items:
+            oneOf:
+              - $ref: '#/components/schemas/FilterCondition'
+              - $ref: '#/components/schemas/FilterExpression'
+        or:
+          type: array
+          items:
+            oneOf:
+              - $ref: '#/components/schemas/FilterCondition'
+              - $ref: '#/components/schemas/FilterExpression'
+
+    FilterCondition:
+      type: object
+      required:
+        - field
+        - operator
+        - value
+      properties:
+        field:
+          type: string
+          description: Field path to filter on (dot notation for nested)
+          example: context.user_id
+        operator:
+          type: string
+          enum:
+            - eq          # equals
+            - neq         # not equals
+            - gt          # greater than
+            - gte         # greater than or equal
+            - lt          # less than
+            - lte         # less than or equal
+            - contains    # array contains
+            - not_contains
+            - starts_with
+            - ends_with
+            - in          # value in array
+            - not_in
+            - exists
+            - not_exists
+            - regex
+        value:
+          description: Value to compare against
+          oneOf:
+            - type: string
+            - type: number
+            - type: boolean
+            - type: array
+              items: {}
+
+    # ========== Response Schemas ==========
+    QueryRunsResponse:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Run'
+        pagination:
+          $ref: '#/components/schemas/PaginationInfo'
+        total_count:
+          type: integer
+          description: Total number of matching runs
+        query_time_ms:
+          type: integer
+          description: Time to execute query
+
+    PaginationInfo:
+      type: object
+      properties:
+        limit:
+          type: integer
+        offset:
+          type: integer
+        has_more:
+          type: boolean
+        next_cursor:
+          type: string
+          nullable: true
+
+    StepListResponse:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Step'
+        pagination:
+          $ref: '#/components/schemas/PaginationInfo'
+        total_count:
+          type: integer
+
+    RunStatsResponse:
+      type: object
+      properties:
+        period:
+          type: object
+          properties:
+            from:
+              type: string
+              format: date-time
+            to:
+              type: string
+              format: date-time
+        totals:
+          type: object
+          properties:
+            run_count:
+              type: integer
+            completed_count:
+              type: integer
+            failed_count:
+              type: integer
+            success_rate:
+              type: number
+            avg_duration_ms:
+              type: number
+            p50_duration_ms:
+              type: number
+            p95_duration_ms:
+              type: number
+            p99_duration_ms:
+              type: number
+            total_steps:
+              type: integer
+            avg_steps_per_run:
+              type: number
+        groups:
+          type: array
+          items:
+            type: object
+            properties:
+              key:
+                type: string
+              count:
+                type: integer
+              success_rate:
+                type: number
+              avg_duration_ms:
+                type: number
+
+    # ========== Error Schema ==========
+    Error:
+      type: object
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: string
+          description: Error code
+          example: BAD_REQUEST
+        message:
+          type: string
+          description: Human-readable error message
+        details:
+          type: array
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+              issue:
+                type: string
+          nullable: true
+        trace_id:
+          type: string
+          description: Trace ID for debugging
